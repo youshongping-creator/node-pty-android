@@ -1,0 +1,160 @@
+name: Build node-pty for Android (node-addon-api)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    strategy:
+      matrix:
+        target: [android-arm64, android-arm]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            wget unzip curl git cmake ninja-build \
+            python3
+            
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Download Android NDK
+        run: |
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip -O ndk.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          
+      - name: Configure NDK
+        run: |
+          export ANDROID_NDK=$ANDROID_NDK_HOME
+          export PATH=$ANDROID_NDK:$PATH
+          echo "CC=aarch64-linux-android21-clang" >> $GITHUB_ENV
+          echo "CXX=aarch64-linux-android21-clang++" >> $GITHUB_ENV
+          # Create toolchain file for node-gyp
+          cat << 'EOF' > $HOME/android.toolchain.cmake
+          cmake_minimum_required(VERSION 3.10)
+          set(CMAKE_SYSTEM_NAME Android)
+          set(CMAKE_SYSTEM_VERSION 21)
+          set(CMAKE_ANDROID_ARCH_ABI ${{ matrix.target == 'android-arm64' && 'arm64-v8a' || 'armeabi-v7a' }})
+          set(CMAKE_ANDROID_NDK $ANDROID_NDK_HOME)
+          set(CMAKE_ANDROID_STL_TYPE c++_shared)
+          set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+          EOF
+          
+      - name: Clone node-addon-api
+        run: |
+          git clone --depth 1 https://github.com/nodejs/node-addon-api node-addon-api
+      
+      - name: Clone and patch node-pty
+        run: |
+          # Use the fork that supports node-addon-api
+          git clone --depth 1 https://github.com/metrobiotics/node-pty.git node-pty-src
+          
+      - name: Configure node-pty
+        run: |
+          export ANDROID_NDK=$ANDROID_NDK_HOME
+          export CMAKE_TOOLCHAIN_FILE=$HOME/android.toolchain.cmake
+          export CC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          export CXX=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+          export CMAKE_SYSROOT=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          
+          cd node-pty-src
+          npm install
+          node-gyp configure --arch=arm64 --directory=. 2>&1 | head -30
+          
+      - name: Build node-pty
+        run: |
+          export ANDROID_NDK=$ANDROID_NDK_HOME
+          export CC=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          export CXX=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+          export CMAKE_SYSROOT=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          
+          cd node-pty-src
+          node-gyp build --arch=arm64 --directory=. 2>&1 | tail -20
+        timeout-minutes: 30
+        
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-${{ matrix.target }}
+          path: node-pty-src/build/Release/*.node
+          retention-days: 30
+
+  build-prebuild:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout node-pty
+        uses: actions/checkout@v4
+        with:
+          repository: metrobiotics/node-pty
+          path: node-pty
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install dependencies
+        run: |
+          cd node-pty
+          npm install
+          
+      - name: Install Python 3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3
+          
+      - name: Download Android NDK
+        run: |
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip -O ndk.zip
+          unzip -q ndk.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          
+      - name: Build for Android ARM64
+        run: |
+          cd node-pty
+          export ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b
+          export CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
+          export CXX=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+          export CFLAGS="-target arm64-v8a -fPIC -D__ANDROID__"
+          export CXXFLAGS="-target arm64-v8a -fPIC -D__ANDROID__"
+          export LDFLAGS="-target arm64-v8a"
+          export TARGET_ARCH=arm64
+          export GYP_ANGLE_OBJS_OK=1
+          npm run prebuild-install -- --arch=arm64 2>&1 || true
+          node-gyp configure --arch=arm64 --release 2>&1 | head -20
+          node-gyp build --arch=arm64 --release 2>&1 | tail -30
+        timeout-minutes: 30
+        
+      - name: Upload artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-android-arm64
+          path: node-pty/build/Release/*.node
+          retention-days: 30
+          
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: node-pty/build/Release/**/*.log
+          retention-days: 7
