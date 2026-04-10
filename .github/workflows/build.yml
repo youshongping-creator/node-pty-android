@@ -102,6 +102,14 @@ jobs:
           cd node-pty-source
           npm install node-addon-api --save-dev
           
+      - name: Download Node.js source headers
+        run: |
+          echo "=== Downloading Node.js v25.8.2 source headers ==="
+          wget -q https://nodejs.org/dist/v25.8.2/node-v25.8.2-headers.tar.gz
+          tar -xzf node-v25.8.2-headers.tar.gz
+          echo "NODE_HEADERS_DIR=$(pwd)/node-v25.8.2-headers" >> $GITHUB_ENV
+          echo "✅ Node.js headers downloaded to: $(pwd)/node-v25.8.2-headers"
+          
       - name: Build for Android ARM64 using node-gyp
         run: |
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
@@ -124,6 +132,7 @@ jobs:
           echo "CXX: $(which $CXX)"
           echo "CFLAGS: $CFLAGS"
           echo "CXXFLAGS: $CXXFLAGS"
+          echo "NODE_HEADERS_DIR: $NODE_HEADERS_DIR"
           
           cd node-pty-source
           
@@ -134,7 +143,7 @@ jobs:
           echo "=== Building with node-gyp ==="
           npx node-gyp configure --verbose --arch=arm64 --target=25.8.2 \
             --target_arch=arm64 --target_platform=android \
-            --nodedir="$TOOLCHAIN/sysroot/usr/include" \
+            --nodedir="$NODE_HEADERS_DIR" \
             --python=python3 \
             --binding=binding.gyp.android 2>&1 | tee configure.log
             
