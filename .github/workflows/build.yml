@@ -10,76 +10,177 @@ jobs:
     runs-on: ubuntu-22.04
     
     steps:
-      - name: Checkout node-pty
+      - name: Checkout node-pty-android
         uses: actions/checkout@v4
         with:
-          repository: microsoft/node-pty
-          path: node-pty
+          path: node-pty-android
           
-      - name: Setup Node.js
+      - name: Setup Node.js for Android cross-compilation
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           
-      - name: Install Python 3
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3 make g++
+          sudo apt-get install -y python3 make g++ curl wget unzip
           
-      - name: Download Android NDK
+      - name: Setup Android NDK
+        uses: android-actions/setup-ndk@v1
+        with:
+          ndk-version: '26b'
+          
+      - name: Clone node-pty source
         run: |
-          mkdir -p $HOME/android-ndk
-          cd $HOME/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
-          unzip -q android-ndk-r26b-linux.zip
-          ls -la $HOME/android-ndk/android-ndk-r26b/toolchains/llvm/prebuilt/
+          git clone --depth 1 https://github.com/microsoft/node-pty.git node-pty-source
+          cd node-pty-source
+          echo "Node-pty version: $(git describe --tags --abbrev=0 || echo 'main')"
+          
+      - name: Configure cross-compilation environment
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
+          
+          # Set up toolchain paths
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "TOOLCHAIN=$TOOLCHAIN"
+          
+          # Create a custom binding.gyp for Android cross-compilation
+          cat > node-pty-source/binding.gyp.android << 'EOF'
+          {
+            "targets": [
+              {
+                "target_name": "pty",
+                "sources": ["src/unix/pty.cc"],
+                "include_dirs": [
+                  "<!@(node -p \"require('node-addon-api').include\")"
+                ],
+                "cflags": [
+                  "-fPIC",
+                  "-D__ANDROID__",
+                  "-DANDROID"
+                ],
+                "cflags_cc": [
+                  "-fPIC",
+                  "-D__ANDROID__", 
+                  "-DANDROID",
+                  "-std=c++14",
+                  "-stdlib=libc++"
+                ],
+                "conditions": [
+                  ["OS=='android'", {
+                    "cflags": [
+                      "--target=aarch64-linux-android21",
+                      "--sysroot=<(TOOLCHAIN)/sysroot"
+                    ],
+                    "cflags_cc": [
+                      "--target=aarch64-linux-android21",
+                      "--sysroot=<(TOOLCHAIN)/sysroot"
+                    ],
+                    "ldflags": [
+                      "--target=aarch64-linux-android21",
+                      "--sysroot=<(TOOLCHAIN)/sysroot",
+                      "-lc++_shared"
+                    ]
+                  }]
+                ]
+              }
+            ]
+          }
+          EOF
           
       - name: Install node-addon-api
         run: |
-          cd $HOME
-          npm install node-addon-api
+          npm install -g node-addon-api
+          cd node-pty-source
+          npm install node-addon-api --save-dev
           
-      - name: Build for Android ARM64
+      - name: Build for Android ARM64 using node-gyp
         run: |
-          NDK=$HOME/android-ndk/android-ndk-r26b
-          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           
-          export PATH=$TOOLCHAIN/bin:$PATH
-          export CC=aarch64-linux-android21-clang
-          export CXX=aarch64-linux-android21-clang++
-          export LD=aarch64-linux-android-ld
-          export AR=aarch64-linux-android-ar
-          export RANLIB=aarch64-linux-android-ranlib
-          export SYSROOT=$TOOLCHAIN/sysroot
+          # Set cross-compilation environment variables
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android21-clang"
+          export CXX="$TOOLCHAIN/bin/aarch64-linux-android21-clang++"
+          export AR="$TOOLCHAIN/bin/aarch64-linux-android-ar"
+          export LD="$TOOLCHAIN/bin/aarch64-linux-android-ld"
+          export RANLIB="$TOOLCHAIN/bin/aarch64-linux-android-ranlib"
+          export STRIP="$TOOLCHAIN/bin/aarch64-linux-android-strip"
+          export READELF="$TOOLCHAIN/bin/aarch64-linux-android-readelf"
           
-          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -Wall"
-          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++ -Wall"
-          export LDFLAGS="--sysroot=$SYSROOT -target aarch64-linux-android21"
-          export CPPFLAGS="--sysroot=$SYSROOT"
+          export CFLAGS="--target=aarch64-linux-android21 --sysroot=$TOOLCHAIN/sysroot -fPIC -D__ANDROID__ -DANDROID"
+          export CXXFLAGS="--target=aarch64-linux-android21 --sysroot=$TOOLCHAIN/sysroot -fPIC -D__ANDROID__ -DANDROID -std=c++14 -stdlib=libc++"
+          export LDFLAGS="--target=aarch64-linux-android21 --sysroot=$TOOLCHAIN/sysroot -lc++_shared"
           
-          cd node-pty
-          npm install --ignore-scripts
+          echo "=== Cross-compilation environment ==="
+          echo "CC: $(which $CC)"
+          echo "CXX: $(which $CXX)"
+          echo "CFLAGS: $CFLAGS"
+          echo "CXXFLAGS: $CXXFLAGS"
           
-          # Build manually with NDK
-          mkdir -p build/Release/obj.target/pty
+          cd node-pty-source
           
-          $CXX $CXXFLAGS -Isrc/unix -Isrc -I$HOME/node_modules/node-addon-api \
-            -o build/Release/obj.target/pty/pty.o \
-            -c src/unix/pty.cc 2>&1
+          # Clean previous builds
+          rm -rf build/
           
-          $CXX -shared -fPIC -o build/Release/pty.node \
-            build/Release/obj.target/pty/pty.o \
-            -lc++_shared 2>&1
+          # Build with custom binding.gyp
+          echo "=== Building with node-gyp ==="
+          npx node-gyp configure --verbose --arch=arm64 --target=25.8.2 \
+            --target_arch=arm64 --target_platform=android \
+            --nodedir="$TOOLCHAIN/sysroot/usr/include" \
+            --python=python3 \
+            --binding=binding.gyp.android 2>&1 | tee configure.log
+            
+          npx node-gyp build --verbose --arch=arm64 2>&1 | tee build.log
           
+          # Verify the built binary
+          echo "=== Verifying built binary ==="
           file build/Release/pty.node
+          $READELF -h build/Release/pty.node | grep -i "machine\|class"
+          ls -la build/Release/pty.node
           
-      - name: Verify and upload
-        if: success()
+      - name: Test binary architecture
         run: |
-          file node-pty/build/Release/pty.node
-          ls -la node-pty/build/Release/pty.node
+          echo "=== Testing binary architecture ==="
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          READELF="$TOOLCHAIN/bin/aarch64-linux-android-readelf"
+          
+          if [ -f "node-pty-source/build/Release/pty.node" ]; then
+            echo "Binary file info:"
+            file node-pty-source/build/Release/pty.node
+            
+            echo "ELF header:"
+            $READELF -h node-pty-source/build/Release/pty.node 2>&1 || echo "Readelf failed, trying with host readelf"
+            readelf -h node-pty-source/build/Release/pty.node 2>&1 || true
+            
+            # Check if it's ARM64
+            if readelf -h node-pty-source/build/Release/pty.node 2>/dev/null | grep -q "AArch64"; then
+              echo "✅ Binary is ARM64 (AArch64)"
+            elif readelf -h node-pty-source/build/Release/pty.node 2>/dev/null | grep -q "x86-64"; then
+              echo "❌ Binary is x86-64, not ARM64"
+              exit 1
+            else
+              echo "⚠️ Could not determine architecture"
+            fi
+          else
+            echo "❌ Binary not found"
+            exit 1
+          fi
+          
+      - name: Upload Android ARM64 binary
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-android-arm64
-          path: node-pty/build/Release/pty.node
+          path: node-pty-source/build/Release/pty.node
           retention-days: 30
+          
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            node-pty-source/configure.log
+            node-pty-source/build.log
+          retention-days: 7
