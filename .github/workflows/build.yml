@@ -29,7 +29,7 @@ jobs:
       - name: Install Python 3
         run: |
           sudo apt-get update
-          sudo apt-get install -y python3
+          sudo apt-get install -y python3 make g++
           
       - name: Download Android NDK
         run: |
@@ -39,55 +39,54 @@ jobs:
           unzip -q ndk.zip
           echo "ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
           
+      - name: Create standalone toolchain
+        run: |
+          export ANDROID_NDK=$HOME/android-ndk/android-ndk-r26b
+          $ANDROID_NDK/build/tools/make-standalone-toolchain.sh \
+            --arch=arm64 \
+            --platform=android-21 \
+            --install-dir=$HOME/android-toolchain
+          echo "TOOLCHAIN=$HOME/android-toolchain" >> $GITHUB_ENV
+          ls -la $HOME/android-toolchain/bin/
+          
       - name: Build for Android ARM64
         run: |
+          export PATH=$HOME/android-toolchain/bin:$PATH
+          export CC=$HOME/android-toolchain/bin/aarch64-linux-android21-clang
+          export CXX=$HOME/android-toolchain/bin/aarch64-linux-android21-clang++
+          export LD=$HOME/android-toolchain/bin/ld.lld
+          export AR=$HOME/android-toolchain/bin/aarch64-linux-android-ar
+          export AS=$HOME/android-toolchain/bin/aarch64-linux-android21-clang
+          export CFLAGS="-target aarch64-linux-android21 -fPIC"
+          export CXXFLAGS="-target aarch64-linux-android21 -fPIC -stdlib=libc++"
+          export LDFLAGS="-target aarch64-linux-android21"
+          export sysroot=$HOME/android-toolchain/sysroot
+          export ac_cv_func_getpwent=no
+          export ac_cv_func_getpwnam=no
+          export ac_cv_func_getpwuid=no
+          
           cd node-pty
-          export ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b
-          export PATH=$ANDROID_NDK_HOME:$PATH
-          
-          # Set up compiler
-          export CC=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang
-          export CXX=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
-          export LD=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/ld.lld
-          
-          # Set up sysroot
-          export SYSROOT=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target arm64-v8a -fPIC -march=armv8-a"
-          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target arm64-v8a -fPIC -march=armv8-a -std=c++17"
-          export LDFLAGS="--sysroot=$SYSROOT -target arm64-v8a -L$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
-          
-          export ARCH=arm64
-          export TARGET_ARCH=arm64
-          export npm_config_arch=arm64
-          export npm_config_target_arch=arm64
-          export npm_config_build_from_source=true
-          export CMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake
-          
-          node-gyp configure --arch=arm64 --release 2>&1 | tail -20
-          node-gyp build --arch=arm64 --release 2>&1 | tail -30
+          npm run prebuild-install -- --arch=arm64 2>&1 || true
+          node-gyp configure --arch=arm64 --release 2>&1 | tail -10
+          node-gyp build --arch=arm64 --release 2>&1 | tail -20
         timeout-minutes: 30
         
-      - name: Find build output
+      - name: Verify architecture
         run: |
-          find /home/runner/work/node-pty-android -name "*.node" -type f 2>/dev/null
-          ls -la node-pty/build/Release/ 2>/dev/null || echo "No build directory"
+          file node-pty/build/Release/pty.node 2>/dev/null || find /home/runner/work -name "pty.node" -exec file {} \;
           
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-android-arm64
-          path: |
-            node-pty/build/Release/*.node
-            node-pty/build/Release/obj.target/
+          path: node-pty/build/Release/pty.node
           retention-days: 30
           
       - name: Upload build logs
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-arm64
-          path: |
-            node-pty/build/Release/**/*.log
-            node-pty/build/*.log
+          name: build-logs
+          path: node-pty/build/**/*.log
           retention-days: 7
