@@ -26,9 +26,16 @@ jobs:
           sudo apt-get install -y python3 make g++ curl wget unzip
           
       - name: Setup Android NDK
-        uses: android-actions/setup-ndk@v1
-        with:
-          ndk-version: '26b'
+        run: |
+          echo "=== Downloading Android NDK r26b ==="
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          echo "✅ Android NDK installed at: $HOME/android-ndk/android-ndk-r26b"
+          ls -la $HOME/android-ndk/android-ndk-r26b/toolchains/llvm/prebuilt/
           
       - name: Clone node-pty source
         run: |
