@@ -7,12 +7,8 @@ on:
 
 jobs:
   build-android-arm64:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     
-    env:
-      ANDROID_NDK_VERSION: r26b
-      ANDROID_API: 21
-      
     steps:
       - name: Checkout node-pty
         uses: actions/checkout@v4
@@ -25,88 +21,74 @@ jobs:
         with:
           node-version: '20'
           
+      - name: Setup Android NDK
+        uses: android-actions/setup-ndk@v2
+        with:
+          ndk-version: r26b
+          
       - name: Install Python 3
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 make g++
           
-      - name: Download Android NDK
-        run: |
-          mkdir -p $HOME/android-ndk
-          cd $HOME/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip -O ndk.zip
-          unzip -q ndk.zip
-          
-      - name: Install node-addon-api headers
+      - name: Install node-addon-api
         run: |
           cd $HOME
           npm install node-addon-api
-          ls node_modules/node-addon-api/
           
-      - name: Cross-compile pty.node
+      - name: Build for Android ARM64
         run: |
-          NDK=$HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
-          SYSROOT=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-          CLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
-          LD=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-ld
-          AR=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-ar
+          cd node-pty
+          npm install --ignore-scripts
           
+          export ANDROID_NDK_HOME=$HOME/android-ndk/${{ runner.os == 'macOS' && 'mac' || 'linux' }}/android-ndk-r26b'
+          echo "NDK path: $ANDROID_NDK_HOME"
+          ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/ 2>/dev/null
+          
+          # Get NDK toolchain path
+          NDK_TOOLCHAIN=$(ls -d $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/*/  | head -1)
+          echo "Toolchain: $NDK_TOOLCHAIN"
+          
+          export PATH=$NDK_TOOLCHAIN/bin:$PATH
+          export CC=aarch64-linux-android21-clang
+          export CXX=aarch64-linux-android21-clang++
+          export LD=aarch64-linux-android-ld
+          export AR=aarch64-linux-android-ar
+          export RANLIB=aarch64-linux-android-ranlib
+          export SYSROOT=$NDK_TOOLCHAIN/sysroot
+          
+          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC"
+          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++"
+          export LDFLAGS="--sysroot=$SYSROOT -target aarch64-linux-android21"
+          
+          # Patch binding.gyp to skip node-gyp
+          node-gyp configure --arch=arm64 --release 2>&1 | tail -5 || true
+          
+          # Build manually
           mkdir -p build/Release/obj.target/pty
           
-          # Compile pty.cc
-          $CLANG \
-            --sysroot=$SYSROOT \
-            -D__ANDROID__ -DANDROID \
-            -target aarch64-linux-android21 \
-            -fPIC -fno-rtti \
-            -I$HOME/node_modules/node-addon-api \
-            -Isrc/unix \
-            -Isrc \
+          $CXX $CXXFLAGS -Isrc/unix -Isrc -Inode_modules/node-addon-api \
             -o build/Release/obj.target/pty/pty.o \
             -c src/unix/pty.cc 2>&1 | tail -10
           
-          # Create shared library
-          aarch64-linux-android21-clang++ \
-            --sysroot=$SYSROOT \
-            -D__ANDROID__ -DANDROID \
-            -target aarch64-linux-android21 \
-            -shared -fPIC \
-            -o build/Release/pty.node \
+          $CXX -shared -fPIC -o build/Release/pty.node \
             build/Release/obj.target/pty/pty.o \
-            -L$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/21 \
             -lc++_shared 2>&1 | tail -10
           
           file build/Release/pty.node
-          
-      - name: Create node module
-        run: |
-          mkdir -p module
-          cp build/Release/pty.node module/
-          cp node_modules/node-addon-api/*.h module/ 2>/dev/null || true
-          cat > module/binding.gyp << 'EOF'
-{
-  "targets": [{
-    "target_name": "pty",
-    "sources": ["pty.node"]
-  }]
-}
-EOF
-          cat > module/package.json << 'EOF'
-{
-  "name": "@youshongping/node-pty-android-arm64",
-  "version": "1.0.0",
-  "main": "index.js"
-}
-EOF
-          cat > module/index.js << 'EOF'
-module.exports = require('./pty.node');
-EOF
-          tar -czvf pty-module.tar.gz module/
           
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-android-arm64
-          path: build/Release/pty.node
+          path: node-pty/build/Release/pty.node
           retention-days: 30
+          
+      - name: Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: node-pty/build/**/*.log
+          retention-days: 7
