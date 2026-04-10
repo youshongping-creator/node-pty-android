@@ -9,6 +9,10 @@ jobs:
   build-android-arm64:
     runs-on: ubuntu-22.04
     
+    env:
+      ANDROID_NDK_VERSION: r26b
+      ANDROID_API: 21
+      
     steps:
       - name: Checkout node-pty
         uses: actions/checkout@v4
@@ -35,29 +39,33 @@ jobs:
         run: |
           mkdir -p $HOME/android-ndk
           cd $HOME/android-ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip -O ndk.zip
+          wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip -O ndk.zip
           unzip -q ndk.zip
           ls -la $HOME/android-ndk/
           
       - name: Create standalone toolchain
+        env:
+          ANDROID_NDK: ${{ runner.temp }}/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
         run: |
-          ANDROID_NDK="$HOME/android-ndk/android-ndk-r26b"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK" >> $GITHUB_ENV
-          $ANDROID_NDK/build/tools/make-standalone-toolchain.sh \
+          echo "Using NDK at: $ANDROID_NDK"
+          ls -la $ANDROID_NDK/build/tools/ 2>/dev/null || echo "Checking alternative..."
+          ls -la $HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}/build/tools/ 2>/dev/null
+          mkdir -p $HOME/android-toolchain
+          $HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}/build/tools/make-standalone-toolchain.sh \
             --arch=arm64 \
-            --platform=android-21 \
+            --platform=${{ env.ANDROID_API }} \
             --install-dir=$HOME/android-toolchain
-          echo "TOOLCHAIN=$HOME/android-toolchain" >> $GITHUB_ENV
-          ls -la $HOME/android-toolchain/bin/ | head -10
+          ls -la $HOME/android-toolchain/bin/ | head -5
           
       - name: Build for Android ARM64
+        env:
+          PATH: ${{ runner.temp }}/android-toolchain/bin:$PATH
         run: |
           export PATH=$HOME/android-toolchain/bin:$PATH
+          which aarch64-linux-android21-clang
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
           export LD=aarch64-linux-android21-ld
-          export AR=aarch64-linux-android21-ar
-          export AS=aarch64-linux-android21-clang
           export CFLAGS="-target aarch64-linux-android21 -fPIC"
           export CXXFLAGS="-target aarch64-linux-android21 -fPIC -stdlib=libc++"
           export LDFLAGS="-target aarch64-linux-android21"
