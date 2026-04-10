@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-android-arm64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     
     steps:
       - name: Checkout node-pty
@@ -21,15 +21,18 @@ jobs:
         with:
           node-version: '20'
           
-      - name: Setup Android NDK
-        uses: android-actions/setup-ndk@v2
-        with:
-          ndk-version: r26b
-          
       - name: Install Python 3
         run: |
           sudo apt-get update
           sudo apt-get install -y python3 make g++
+          
+      - name: Download Android NDK
+        run: |
+          mkdir -p $HOME/android-ndk
+          cd $HOME/android-ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          ls -la $HOME/android-ndk/android-ndk-r26b/toolchains/llvm/prebuilt/
           
       - name: Install node-addon-api
         run: |
@@ -38,57 +41,45 @@ jobs:
           
       - name: Build for Android ARM64
         run: |
-          cd node-pty
-          npm install --ignore-scripts
+          NDK=$HOME/android-ndk/android-ndk-r26b
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
           
-          export ANDROID_NDK_HOME=$HOME/android-ndk/${{ runner.os == 'macOS' && 'mac' || 'linux' }}/android-ndk-r26b'
-          echo "NDK path: $ANDROID_NDK_HOME"
-          ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/ 2>/dev/null
-          
-          # Get NDK toolchain path
-          NDK_TOOLCHAIN=$(ls -d $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/*/  | head -1)
-          echo "Toolchain: $NDK_TOOLCHAIN"
-          
-          export PATH=$NDK_TOOLCHAIN/bin:$PATH
+          export PATH=$TOOLCHAIN/bin:$PATH
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
           export LD=aarch64-linux-android-ld
           export AR=aarch64-linux-android-ar
           export RANLIB=aarch64-linux-android-ranlib
-          export SYSROOT=$NDK_TOOLCHAIN/sysroot
+          export SYSROOT=$TOOLCHAIN/sysroot
           
-          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC"
-          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++"
+          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -Wall"
+          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++ -Wall"
           export LDFLAGS="--sysroot=$SYSROOT -target aarch64-linux-android21"
+          export CPPFLAGS="--sysroot=$SYSROOT"
           
-          # Patch binding.gyp to skip node-gyp
-          node-gyp configure --arch=arm64 --release 2>&1 | tail -5 || true
+          cd node-pty
+          npm install --ignore-scripts
           
-          # Build manually
+          # Build manually with NDK
           mkdir -p build/Release/obj.target/pty
           
-          $CXX $CXXFLAGS -Isrc/unix -Isrc -Inode_modules/node-addon-api \
+          $CXX $CXXFLAGS -Isrc/unix -Isrc -I$HOME/node_modules/node-addon-api \
             -o build/Release/obj.target/pty/pty.o \
-            -c src/unix/pty.cc 2>&1 | tail -10
+            -c src/unix/pty.cc 2>&1
           
           $CXX -shared -fPIC -o build/Release/pty.node \
             build/Release/obj.target/pty/pty.o \
-            -lc++_shared 2>&1 | tail -10
+            -lc++_shared 2>&1
           
           file build/Release/pty.node
           
-      - name: Upload artifact
+      - name: Verify and upload
         if: success()
+        run: |
+          file node-pty/build/Release/pty.node
+          ls -la node-pty/build/Release/pty.node
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-android-arm64
           path: node-pty/build/Release/pty.node
           retention-days: 30
-          
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: node-pty/build/**/*.log
-          retention-days: 7
