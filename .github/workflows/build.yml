@@ -25,11 +25,6 @@ jobs:
         with:
           node-version: '20'
           
-      - name: Install dependencies
-        run: |
-          cd node-pty
-          npm install
-          
       - name: Install Python 3
         run: |
           sudo apt-get update
@@ -42,50 +37,76 @@ jobs:
           wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip -O ndk.zip
           unzip -q ndk.zip
           
-      - name: Build for Android ARM64
+      - name: Install node-addon-api headers
+        run: |
+          cd $HOME
+          npm install node-addon-api
+          ls node_modules/node-addon-api/
+          
+      - name: Cross-compile pty.node
         run: |
           NDK=$HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
-          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+          SYSROOT=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          CLANG=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-clang++
+          LD=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-ld
+          AR=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android21-ar
           
-          export PATH=$TOOLCHAIN:$PATH
-          export CC=aarch64-linux-android21-clang
-          export CXX=aarch64-linux-android21-clang++
-          export LD=aarch64-linux-android21-ld
-          export AR=aarch64-linux-android-ar
-          export RANLIB=aarch64-linux-android-ranlib
-          export SYSROOT=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          mkdir -p build/Release/obj.target/pty
           
-          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -Wall"
-          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++ -Wall"
-          export LDFLAGS="--sysroot=$SYSROOT -target aarch64-linux-android21 -L$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/21 -lc++_shared"
-          export CPPFLAGS="--sysroot=$SYSROOT"
-          export ac_cv_func_getpwent=no
-          export ac_cv_func_getpwnam=no
-          export ac_cv_func_getpwuid=no
-          export gyp_cv_sysroot="$SYSROOT"
+          # Compile pty.cc
+          $CLANG \
+            --sysroot=$SYSROOT \
+            -D__ANDROID__ -DANDROID \
+            -target aarch64-linux-android21 \
+            -fPIC -fno-rtti \
+            -I$HOME/node_modules/node-addon-api \
+            -Isrc/unix \
+            -Isrc \
+            -o build/Release/obj.target/pty/pty.o \
+            -c src/unix/pty.cc 2>&1 | tail -10
           
-          cd node-pty
-          npm run prebuild-install -- --arch=arm64 2>&1 || echo "prebuild-install skipped"
-          node-gyp configure --arch=arm64 --release 2>&1 | tail -20
-          node-gyp build --arch=arm64 --release 2>&1 | tail -30
-        timeout-minutes: 30
-        
-      - name: Verify architecture
+          # Create shared library
+          aarch64-linux-android21-clang++ \
+            --sysroot=$SYSROOT \
+            -D__ANDROID__ -DANDROID \
+            -target aarch64-linux-android21 \
+            -shared -fPIC \
+            -o build/Release/pty.node \
+            build/Release/obj.target/pty/pty.o \
+            -L$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/21 \
+            -lc++_shared 2>&1 | tail -10
+          
+          file build/Release/pty.node
+          
+      - name: Create node module
         run: |
-          file node-pty/build/Release/pty.node 2>/dev/null || find /home/runner/work -name "pty.node" -exec file {} \;
+          mkdir -p module
+          cp build/Release/pty.node module/
+          cp node_modules/node-addon-api/*.h module/ 2>/dev/null || true
+          cat > module/binding.gyp << 'EOF'
+{
+  "targets": [{
+    "target_name": "pty",
+    "sources": ["pty.node"]
+  }]
+}
+EOF
+          cat > module/package.json << 'EOF'
+{
+  "name": "@youshongping/node-pty-android-arm64",
+  "version": "1.0.0",
+  "main": "index.js"
+}
+EOF
+          cat > module/index.js << 'EOF'
+module.exports = require('./pty.node');
+EOF
+          tar -czvf pty-module.tar.gz module/
           
       - name: Upload artifact
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: node-pty-android-arm64
-          path: node-pty/build/Release/pty.node
+          path: build/Release/pty.node
           retention-days: 30
-          
-      - name: Upload build logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs
-          path: node-pty/build/**/*.log
-          retention-days: 7
