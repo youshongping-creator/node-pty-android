@@ -42,21 +42,10 @@ jobs:
           wget -q https://dl.google.com/android/repository/android-ndk-${{ env.ANDROID_NDK_VERSION }}-linux.zip -O ndk.zip
           unzip -q ndk.zip
           
-      - name: Create standalone toolchain
-        run: |
-          NDK_DIR=$HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
-          TOOLCHAIN_SCRIPT=$NDK_DIR/build/tools/make_standalone_toolchain.py
-          mkdir -p $HOME/android-toolchain
-          python3 $TOOLCHAIN_SCRIPT \
-            --arch=arm64 \
-            --api=${{ env.ANDROID_API }} \
-            --stl=c++_shared \
-            --install-dir=$HOME/android-toolchain
-          ls $HOME/android-toolchain/bin/ | head -5
-          
       - name: Build for Android ARM64
         run: |
-          export PATH=$HOME/android-toolchain/bin:$PATH
+          NDK=$HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
+          export PATH=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
           export CFLAGS="-target aarch64-linux-android21 -fPIC"
