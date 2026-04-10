@@ -45,15 +45,28 @@ jobs:
       - name: Build for Android ARM64
         run: |
           NDK=$HOME/android-ndk/android-ndk-${{ env.ANDROID_NDK_VERSION }}
-          export PATH=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH
+          TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+          
+          export PATH=$TOOLCHAIN:$PATH
           export CC=aarch64-linux-android21-clang
           export CXX=aarch64-linux-android21-clang++
-          export CFLAGS="-target aarch64-linux-android21 -fPIC"
-          export CXXFLAGS="-target aarch64-linux-android21 -fPIC -stdlib=libc++"
-          export LDFLAGS="-target aarch64-linux-android21"
+          export LD=aarch64-linux-android21-ld
+          export AR=aarch64-linux-android-ar
+          export RANLIB=aarch64-linux-android-ranlib
+          export SYSROOT=$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          
+          export CFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -Wall"
+          export CXXFLAGS="--sysroot=$SYSROOT -D__ANDROID__ -DANDROID -target aarch64-linux-android21 -fPIC -stdlib=libc++ -Wall"
+          export LDFLAGS="--sysroot=$SYSROOT -target aarch64-linux-android21 -L$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/21 -lc++_shared"
+          export CPPFLAGS="--sysroot=$SYSROOT"
+          export ac_cv_func_getpwent=no
+          export ac_cv_func_getpwnam=no
+          export ac_cv_func_getpwuid=no
+          export gyp_cv_sysroot="$SYSROOT"
           
           cd node-pty
-          node-gyp configure --arch=arm64 --release 2>&1 | tail -10
+          npm run prebuild-install -- --arch=arm64 2>&1 || echo "prebuild-install skipped"
+          node-gyp configure --arch=arm64 --release 2>&1 | tail -20
           node-gyp build --arch=arm64 --release 2>&1 | tail -30
         timeout-minutes: 30
         
