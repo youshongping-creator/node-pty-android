@@ -37,38 +37,34 @@ jobs:
           cd $HOME/android-ndk
           wget -q https://dl.google.com/android/repository/android-ndk-r26b-linux.zip -O ndk.zip
           unzip -q ndk.zip
-          echo "ANDROID_NDK_HOME=$HOME/android-ndk/android-ndk-r26b" >> $GITHUB_ENV
+          ls -la $HOME/android-ndk/
           
       - name: Create standalone toolchain
         run: |
-          export ANDROID_NDK=$HOME/android-ndk/android-ndk-r26b
+          ANDROID_NDK="$HOME/android-ndk/android-ndk-r26b"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK" >> $GITHUB_ENV
           $ANDROID_NDK/build/tools/make-standalone-toolchain.sh \
             --arch=arm64 \
             --platform=android-21 \
             --install-dir=$HOME/android-toolchain
           echo "TOOLCHAIN=$HOME/android-toolchain" >> $GITHUB_ENV
-          ls -la $HOME/android-toolchain/bin/
+          ls -la $HOME/android-toolchain/bin/ | head -10
           
       - name: Build for Android ARM64
         run: |
           export PATH=$HOME/android-toolchain/bin:$PATH
-          export CC=$HOME/android-toolchain/bin/aarch64-linux-android21-clang
-          export CXX=$HOME/android-toolchain/bin/aarch64-linux-android21-clang++
-          export LD=$HOME/android-toolchain/bin/ld.lld
-          export AR=$HOME/android-toolchain/bin/aarch64-linux-android-ar
-          export AS=$HOME/android-toolchain/bin/aarch64-linux-android21-clang
+          export CC=aarch64-linux-android21-clang
+          export CXX=aarch64-linux-android21-clang++
+          export LD=aarch64-linux-android21-ld
+          export AR=aarch64-linux-android21-ar
+          export AS=aarch64-linux-android21-clang
           export CFLAGS="-target aarch64-linux-android21 -fPIC"
           export CXXFLAGS="-target aarch64-linux-android21 -fPIC -stdlib=libc++"
           export LDFLAGS="-target aarch64-linux-android21"
-          export sysroot=$HOME/android-toolchain/sysroot
-          export ac_cv_func_getpwent=no
-          export ac_cv_func_getpwnam=no
-          export ac_cv_func_getpwuid=no
           
           cd node-pty
-          npm run prebuild-install -- --arch=arm64 2>&1 || true
           node-gyp configure --arch=arm64 --release 2>&1 | tail -10
-          node-gyp build --arch=arm64 --release 2>&1 | tail -20
+          node-gyp build --arch=arm64 --release 2>&1 | tail -30
         timeout-minutes: 30
         
       - name: Verify architecture
